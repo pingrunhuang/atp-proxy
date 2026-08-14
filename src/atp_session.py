@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -49,6 +50,34 @@ def _finite(value: Any) -> float | None:
         return value if abs(value) < 1e100 else None
     except (TypeError, ValueError):
         return None
+
+
+def _trade_event_id(
+    *,
+    gateway_name: str,
+    account_id: str,
+    trading_day: str,
+    exchange: str,
+    trade_id: str,
+    fallback: dict[str, Any],
+) -> str:
+    """Return a stable identifier for one native fill."""
+    identity: dict[str, Any] = {
+        "gateway_name": gateway_name,
+        "account_id": account_id,
+        "trading_day": trading_day,
+        "exchange": exchange,
+        "trade_id": trade_id,
+    }
+    if not trade_id:
+        identity["fallback"] = fallback
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"trade:{gateway_name.lower()}:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _exchange_timestamp(data: Any) -> int:
@@ -644,23 +673,53 @@ class AtpSession:
             _text(getattr(data, "ExchangeID", "")),
             _text(getattr(data, "OrderSysID", "")),
         ) or {}
+        gateway_name = "ATP"
+        account_id = self.settings.user_id
+        trading_day = _text(getattr(data, "TradingDay", ""))
+        exchange = _text(getattr(data, "ExchangeID", ""))
+        trade_id = _text(getattr(data, "TradeID", ""))
+        order_id = _text(getattr(data, "OrderSysID", ""))
+        order_ref = _text(getattr(data, "OrderRef", ""))
+        symbol = _text(getattr(data, "InstrumentID", ""))
+        direction = _direction_from_atp(getattr(data, "Direction", ""))
+        offset = _offset_from_atp(getattr(data, "OffsetFlag", ""))
+        price = _finite(getattr(data, "Price", 0))
+        volume = int(getattr(data, "Volume", 0) or 0)
+        trade_time = _text(getattr(data, "TradeTime", ""))
         return {
-            "gateway_name": "ATP",
-            "account_id": self.settings.user_id,
+            "event_id": _trade_event_id(
+                gateway_name=gateway_name,
+                account_id=account_id,
+                trading_day=trading_day,
+                exchange=exchange,
+                trade_id=trade_id,
+                fallback={
+                    "order_id": order_id,
+                    "order_ref": order_ref,
+                    "symbol": symbol,
+                    "direction": direction,
+                    "offset": offset,
+                    "price": price,
+                    "volume": volume,
+                    "trade_time": trade_time,
+                },
+            ),
+            "gateway_name": gateway_name,
+            "account_id": account_id,
             "client_id": owner.get("client_id"),
             "strategy_id": owner.get("strategy_id"),
             "client_order_id": owner.get("client_order_id"),
-            "symbol": _text(getattr(data, "InstrumentID", "")),
-            "exchange": _text(getattr(data, "ExchangeID", "")),
-            "trade_id": _text(getattr(data, "TradeID", "")),
-            "order_id": _text(getattr(data, "OrderSysID", "")),
-            "order_ref": _text(getattr(data, "OrderRef", "")),
-            "direction": _direction_from_atp(getattr(data, "Direction", "")),
-            "offset": _offset_from_atp(getattr(data, "OffsetFlag", "")),
-            "price": _finite(getattr(data, "Price", 0)),
-            "volume": int(getattr(data, "Volume", 0) or 0),
-            "trade_time": _text(getattr(data, "TradeTime", "")),
-            "trading_day": _text(getattr(data, "TradingDay", "")),
+            "symbol": symbol,
+            "exchange": exchange,
+            "trade_id": trade_id,
+            "order_id": order_id,
+            "order_ref": order_ref,
+            "direction": direction,
+            "offset": offset,
+            "price": price,
+            "volume": volume,
+            "trade_time": trade_time,
+            "trading_day": trading_day,
         }
 
     def publish_order(self, payload: dict[str, Any]) -> None:

@@ -131,3 +131,50 @@ def test_trader_callback_runs_login_settlement_sequence(monkeypatch, tmp_path):
     assert calls[0][1].Password == "password"
     assert calls[1][1].InvestorID == "user"
     assert session.td_ready.is_set()
+
+
+def test_trade_payload_has_stable_native_fill_identity(tmp_path):
+    class OwnedRegistry(MemoryRegistry):
+        def find_by_atp(self, *_args, **_kwargs):
+            return {
+                "client_id": "engine-01",
+                "strategy_id": "arb-atp",
+                "client_order_id": "arb-atp-1",
+            }
+
+    session = AtpSession(
+        settings(tmp_path),
+        lambda *_args: None,
+        OwnedRegistry(),
+    )
+    fill = SimpleNamespace(
+        OrderRef="7",
+        ExchangeID="LME",
+        OrderSysID="ORDER-9",
+        InstrumentID="NI3M-LME",
+        TradeID="TRADE-1",
+        Direction="0",
+        OffsetFlag="0",
+        Price=15123.5,
+        Volume=2,
+        TradeTime="10:31:05",
+        TradingDay="20260814",
+    )
+
+    first = session.trade_payload(fill)
+    repeated = session.trade_payload(fill)
+    different = session.trade_payload(
+        SimpleNamespace(**{**vars(fill), "TradeID": "TRADE-2"})
+    )
+
+    assert first["event_id"] == repeated["event_id"]
+    assert first["event_id"].startswith("trade:atp:")
+    assert first["event_id"] != different["event_id"]
+    assert first["gateway_name"] == "ATP"
+    assert first["account_id"] == "user"
+    assert first["trading_day"] == "20260814"
+    assert first["exchange"] == "LME"
+    assert first["trade_id"] == "TRADE-1"
+    assert first["client_id"] == "engine-01"
+    assert first["strategy_id"] == "arb-atp"
+    assert first["client_order_id"] == "arb-atp-1"
