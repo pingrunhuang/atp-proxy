@@ -320,6 +320,7 @@ class AtpTraderSpi(tdapi.CThostFtdcTraderSpi):
                 key,
                 {
                     "gateway_name": "ATP",
+                    "account_id": self.session.settings.user_id,
                     "symbol": symbol,
                     "exchange": _text(getattr(data, "ExchangeID", "")),
                     "direction": direction,
@@ -728,9 +729,31 @@ class AtpSession:
             self.publish(f"orders.{self.settings.user_id}.{payload['strategy_id']}", "order", payload)
 
     def publish_trade(self, payload: dict[str, Any]) -> None:
-        self.publish(f"trades.{self.settings.user_id}", "trade", payload)
-        if payload.get("strategy_id"):
-            self.publish(f"trades.{self.settings.user_id}.{payload['strategy_id']}", "trade", payload)
+        try:
+            trade_cursor = self.order_registry.record_trade(payload)
+        except Exception:
+            logger.exception(
+                "Failed to persist ATP trade before publish event_id={}",
+                payload.get("event_id"),
+            )
+            return
+        logger.debug(
+            "Persisted ATP trade event_id={} strategy_id={} trade_cursor={}",
+            payload.get("event_id"),
+            payload.get("strategy_id"),
+            trade_cursor,
+        )
+        if not trade_cursor:
+            logger.debug("Skip duplicate ATP trade event_id={}", payload.get("event_id"))
+            return
+        published_payload = {**payload, "trade_cursor": int(trade_cursor)}
+        self.publish(f"trades.{self.settings.user_id}", "trade", published_payload)
+        if published_payload.get("strategy_id"):
+            self.publish(
+                f"trades.{self.settings.user_id}.{published_payload['strategy_id']}",
+                "trade",
+                published_payload,
+            )
 
     def close(self) -> None:
         self.md_ready.clear()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import defaultdict
@@ -115,6 +116,25 @@ class OrderRegistry:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_atp_orders_sys_id ON atp_orders(exchange_id, order_sys_id, updated_at DESC)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS atp_trades (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE,
+                    client_id TEXT NOT NULL DEFAULT '',
+                    strategy_id TEXT NOT NULL DEFAULT '',
+                    account_id TEXT NOT NULL DEFAULT '',
+                    trading_day TEXT NOT NULL DEFAULT '',
+                    trade_id TEXT NOT NULL DEFAULT '',
+                    payload JSONB NOT NULL,
+                    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_atp_trades_owner_cursor "
+                "ON atp_trades(client_id, strategy_id, id)"
+            )
 
     def create(self, *, client_id: str, strategy_id: str, client_order_id: str, symbol: str, order_ref: str, payload: str) -> bool:
         with self._pool.connection() as connection:
@@ -182,6 +202,78 @@ class OrderRegistry:
                     "SELECT * FROM atp_orders ORDER BY updated_at DESC"
                 ).fetchall()
             return rows
+
+    def record_trade(self, payload: dict[str, Any]) -> int | None:
+        """Persist one immutable trade before it is published."""
+        event_id = str(payload.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("trade payload requires event_id")
+        with self._pool.connection() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO atp_trades(
+                    event_id, client_id, strategy_id, account_id,
+                    trading_day, trade_id, payload
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (event_id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    event_id,
+                    str(payload.get("client_id") or ""),
+                    str(payload.get("strategy_id") or ""),
+                    str(payload.get("account_id") or ""),
+                    str(payload.get("trading_day") or ""),
+                    str(payload.get("trade_id") or ""),
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                ),
+            ).fetchone()
+            return int(row["id"]) if row is not None else None
+
+    def list_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        page_size = min(max(int(limit), 1), 1000)
+        with self._pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, payload
+                FROM atp_trades
+                WHERE client_id=%s AND strategy_id=%s AND id>%s
+                ORDER BY id ASC
+                LIMIT %s
+                """,
+                (client_id, strategy_id, max(int(after_id), 0), page_size + 1),
+            ).fetchall()
+        has_more = len(rows) > page_size
+        page = rows[:page_size]
+        trades = []
+        for row in page:
+            payload = dict(row["payload"])
+            payload["trade_cursor"] = int(row["id"])
+            trades.append(payload)
+        return {
+            "trades": trades,
+            "next_after_id": int(page[-1]["id"]) if page else max(int(after_id), 0),
+            "has_more": has_more,
+        }
+
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int:
+        with self._pool.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT COALESCE(MAX(id), 0) AS cursor
+                FROM atp_trades
+                WHERE client_id=%s AND strategy_id=%s
+                """,
+                (client_id, strategy_id),
+            ).fetchone()
+        return int(row["cursor"])
 
     def is_healthy(self) -> bool:
         try:

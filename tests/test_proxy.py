@@ -17,6 +17,7 @@ from registry import SubscriptionRegistry
 class InMemoryOrderRegistry:
     def __init__(self):
         self.orders = {}
+        self.trades = []
         self.closed = False
 
     def create(self, *, client_id, strategy_id, client_order_id, symbol, order_ref, payload):
@@ -70,6 +71,36 @@ class InMemoryOrderRegistry:
             for order in self.orders.values()
             if strategy_id is None or order["strategy_id"] == strategy_id
         ]
+
+    def record_trade(self, payload):
+        if any(item["event_id"] == payload["event_id"] for item in self.trades):
+            return False
+        self.trades.append(dict(payload))
+        return True
+
+    def list_trades(self, client_id, strategy_id, *, after_id=0, limit=500):
+        matching = [
+            item
+            for item in self.trades
+            if item.get("client_id") == client_id
+            and item.get("strategy_id") == strategy_id
+        ]
+        page = matching[after_id : after_id + limit]
+        next_after_id = after_id + len(page)
+        return {
+            "trades": page,
+            "next_after_id": next_after_id,
+            "has_more": next_after_id < len(matching),
+        }
+
+
+    def latest_trade_cursor(self, client_id, strategy_id):
+        return len([
+            item
+            for item in self.trades
+            if item.get("client_id") == client_id
+            and item.get("strategy_id") == strategy_id
+        ])
 
     def is_healthy(self):
         return True
@@ -171,6 +202,47 @@ def test_subscriptions_are_reference_counted_across_strategies(proxy):
     )
     assert last["data"]["newly_inactive"] == ["au2608"]
     assert session.unsubscribed == [[], ["au2608"]]
+
+
+def test_get_trades_is_owner_scoped_and_paginated(proxy):
+    instance, _session = proxy
+    instance.order_registry.record_trade(
+        {
+            "event_id": "trade:atp:1",
+            "client_id": "engine",
+            "strategy_id": "arb-a",
+        }
+    )
+    instance.order_registry.record_trade(
+        {
+            "event_id": "trade:atp:2",
+            "client_id": "engine",
+            "strategy_id": "arb-b",
+        }
+    )
+
+    response = instance.handle_command(
+        {
+            "action": "get_trades",
+            "client_id": "engine",
+            "strategy_id": "arb-a",
+            "after_id": 0,
+            "limit": 10,
+        }
+    )
+
+    assert response["status"] == "ok"
+    assert [item["event_id"] for item in response["data"]["trades"]] == [
+        "trade:atp:1"
+    ]
+    cursor = instance.handle_command(
+        {
+            "action": "get_trade_cursor",
+            "client_id": "engine",
+            "strategy_id": "arb-a",
+        }
+    )
+    assert cursor["data"] == {"cursor": 1}
 
 
 def test_place_order_passes_strategy_identity(proxy):

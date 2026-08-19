@@ -11,11 +11,18 @@ from config import Settings
 
 
 class MemoryRegistry:
+    def __init__(self):
+        self.trades = []
+
     def find_by_atp(self, *_args, **_kwargs):
         return None
 
     def update_atp(self, **_kwargs):
         return None
+
+    def record_trade(self, payload):
+        self.trades.append(dict(payload))
+        return True
 
 
 def settings(tmp_path):
@@ -178,3 +185,27 @@ def test_trade_payload_has_stable_native_fill_identity(tmp_path):
     assert first["client_id"] == "engine-01"
     assert first["strategy_id"] == "arb-atp"
     assert first["client_order_id"] == "arb-atp-1"
+
+
+def test_trade_is_persisted_before_publish(tmp_path):
+    registry = MemoryRegistry()
+    published = []
+    session = AtpSession(
+        settings(tmp_path),
+        lambda topic, event, data: published.append((topic, event, data)),
+        registry,
+    )
+    payload = {
+        "event_id": "trade:atp:persisted-1",
+        "client_id": "engine",
+        "strategy_id": "arb-atp",
+    }
+
+    session.publish_trade(payload)
+
+    assert registry.trades == [payload]
+    assert published[0] == (
+        "trades.user",
+        "trade",
+        {**payload, "trade_cursor": 1},
+    )

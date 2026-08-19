@@ -168,9 +168,33 @@ class AtpProxy:
             if action == "get_orders":
                 if request.get("local_only"):
                     data = self.order_registry.list(strategy_id if request.get("strategy_only") else None)
+                    if client_id:
+                        data = [row for row in data if str(row.get("client_id") or "") == client_id]
                 else:
                     data = self.session.query_orders(self._query_max_age(request))
                 return response_ok(data, request_id)
+            if action == "get_trades":
+                require_fields(request, "client_id", "strategy_id")
+                return response_ok(
+                    self.order_registry.list_trades(
+                        client_id,
+                        strategy_id,
+                        after_id=int(request.get("after_id") or 0),
+                        limit=int(request.get("limit") or 500),
+                    ),
+                    request_id,
+                )
+            if action == "get_trade_cursor":
+                require_fields(request, "client_id", "strategy_id")
+                return response_ok(
+                    {
+                        "cursor": self.order_registry.latest_trade_cursor(
+                            client_id,
+                            strategy_id,
+                        )
+                    },
+                    request_id,
+                )
             if action == "place_order":
                 require_fields(
                     request,
