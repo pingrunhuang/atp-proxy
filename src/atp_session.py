@@ -423,6 +423,10 @@ class AtpSession:
     def active_symbols(self) -> list[str]:
         return self._active_symbols_provider()
 
+    @property
+    def md_enabled(self) -> bool:
+        return self.settings.enable_md
+
     def next_request_id(self) -> int:
         with self._request_lock:
             self._request_id += 1
@@ -433,41 +437,44 @@ class AtpSession:
             raise RuntimeError(
                 "openctp-ctp 6.3.15.7 is unavailable; run ATP on Linux x86_64 or Windows"
             )
-        md_flow = Path(self.settings.flow_path) / "md"
         td_flow = Path(self.settings.flow_path) / "td"
-        md_flow.mkdir(parents=True, exist_ok=True)
         td_flow.mkdir(parents=True, exist_ok=True)
         # ATP v6.3.15 follows the demo signatures: MD accepts only flow/UDP/
         # multicast arguments and TD accepts only a flow path.  Do not pass the
         # newer API's production-mode flag here: v6.3.15 would treat it as UDP.
-        self.md_api = mdapi.CThostFtdcMdApi.CreateFtdcMdApi(
-            str(md_flow.absolute()) + "/"
-        )
         self.td_api = tdapi.CThostFtdcTraderApi.CreateFtdcTraderApi(
             str(td_flow.absolute()) + "/"
         )
-        self.md_spi = AtpMdSpi(self)
         self.td_spi = AtpTraderSpi(self)
-        self.md_api.RegisterSpi(self.md_spi)
-        self.md_api.RegisterFront(self.settings.front_md)
         self.td_api.RegisterSpi(self.td_spi)
         self.td_api.RegisterFront(self.settings.front_td)
         self.td_api.SubscribePrivateTopic(tdapi.THOST_TERT_RESTART)
         self.td_api.SubscribePublicTopic(tdapi.THOST_TERT_RESTART)
-        self.md_api.Init()
+        if self.md_enabled:
+            md_flow = Path(self.settings.flow_path) / "md"
+            md_flow.mkdir(parents=True, exist_ok=True)
+            self.md_api = mdapi.CThostFtdcMdApi.CreateFtdcMdApi(
+                str(md_flow.absolute()) + "/"
+            )
+            self.md_spi = AtpMdSpi(self)
+            self.md_api.RegisterSpi(self.md_spi)
+            self.md_api.RegisterFront(self.settings.front_md)
+            self.md_api.Init()
         self.td_api.Init()
         deadline = time.monotonic() + timeout
-        md_ok = self.md_ready.wait(max(deadline - time.monotonic(), 0))
+        md_ok = not self.md_enabled or self.md_ready.wait(max(deadline - time.monotonic(), 0))
         td_ok = self.td_ready.wait(max(deadline - time.monotonic(), 0))
         return md_ok and td_ok
 
     def is_ready(self) -> bool:
-        return self.md_ready.is_set() and self.td_ready.is_set()
+        return (not self.md_enabled or self.md_ready.is_set()) and self.td_ready.is_set()
 
     def publish_status(self, status: str, **details: Any) -> None:
         self.publish("status.ATP", "status", {"gateway_name": "ATP", "status": status, **details})
 
     def subscribe_market_data(self, symbols: list[str]) -> None:
+        if not self.md_enabled:
+            raise RuntimeError("ATP market data is disabled by ATP_ENABLE_MD=false")
         if not symbols or not self.md_ready.is_set():
             return
         result = self.md_api.SubscribeMarketData([symbol.encode("utf-8") for symbol in symbols], len(symbols))
@@ -475,6 +482,8 @@ class AtpSession:
             raise RuntimeError(f"ATP SubscribeMarketData returned {result}")
 
     def unsubscribe_market_data(self, symbols: list[str]) -> None:
+        if not self.md_enabled:
+            raise RuntimeError("ATP market data is disabled by ATP_ENABLE_MD=false")
         if not symbols or not self.md_ready.is_set():
             return
         result = self.md_api.UnSubscribeMarketData([symbol.encode("utf-8") for symbol in symbols], len(symbols))

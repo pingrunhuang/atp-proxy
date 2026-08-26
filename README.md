@@ -81,6 +81,7 @@ sudo systemctl enable --now atp-proxy.service
 | `ATP_PASSWORD` | 密码 | 必填 |
 | `ATP_FRONT_MD` | 行情前置地址 | 必填 |
 | `ATP_FRONT_TD` | 交易前置地址 | 必填 |
+| `ATP_ENABLE_MD` | 是否创建、登录行情 API 并接受行情订阅；关闭时 `ATP_SYMBOLS` 必须为空 | `true` |
 | `ATP_SYMBOLS` | 启动时订阅的合约，逗号分隔 | 空 |
 | `ZMQ_PUB_PORT` | 事件发布端口 | `5585` |
 | `ZMQ_REP_PORT` | 命令端口 | `5586` |

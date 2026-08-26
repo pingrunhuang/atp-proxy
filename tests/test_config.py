@@ -39,6 +39,17 @@ def test_from_env_uses_atp_names_and_distinct_ports(monkeypatch):
     assert (settings.zmq_pub_port, settings.zmq_rep_port) == (5585, 5586)
 
 
+def test_td_only_mode_does_not_require_md_front(monkeypatch):
+    monkeypatch.setenv("ATP_ENABLE_MD", "false")
+    assert Settings.from_env().enable_md is False
+    valid_settings(front_md="", enable_md=False).validate()
+
+
+def test_td_only_mode_rejects_startup_symbols():
+    with pytest.raises(ValueError, match="ATP_SYMBOLS must be empty"):
+        valid_settings(enable_md=False, initial_symbols=["ag2612"]).validate()
+
+
 def test_validate_rejects_missing_credentials():
     with pytest.raises(ValueError, match="ATP_PASSWORD"):
         valid_settings(password="").validate()

@@ -4,6 +4,13 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y"})
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    return default if value is None else value.strip().lower() in TRUE_VALUES
+
 
 def _int_env(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -33,6 +40,7 @@ class Settings:
     password: str
     front_md: str
     front_td: str
+    enable_md: bool = True
     initial_symbols: list[str] = field(default_factory=list)
     zmq_bind_host: str = "0.0.0.0"
     zmq_pub_port: int = 5585
@@ -54,6 +62,7 @@ class Settings:
             password=os.getenv("ATP_PASSWORD", ""),
             front_md=normalize_front(os.getenv("ATP_FRONT_MD", "")),
             front_td=normalize_front(os.getenv("ATP_FRONT_TD", "")),
+            enable_md=_bool_env("ATP_ENABLE_MD", True),
             initial_symbols=_symbols_env("ATP_SYMBOLS"),
             zmq_bind_host=os.getenv("ZMQ_BIND_HOST", "0.0.0.0"),
             zmq_pub_port=_int_env("ZMQ_PUB_PORT", 5585),
@@ -80,7 +89,6 @@ class Settings:
                 "ATP_BROKER_ID": self.broker_id,
                 "ATP_USER_ID": self.user_id,
                 "ATP_PASSWORD": self.password,
-                "ATP_FRONT_MD": self.front_md,
                 "ATP_FRONT_TD": self.front_td,
                 "DATABASE_URL": self.database_url,
             }.items()
@@ -88,6 +96,11 @@ class Settings:
         ]
         if missing:
             raise ValueError(f"Missing required configuration: {', '.join(missing)}")
+        if not self.enable_md:
+            if self.initial_symbols:
+                raise ValueError("ATP_SYMBOLS must be empty when ATP_ENABLE_MD=false")
+        elif not self.front_md:
+            raise ValueError("Missing required configuration: ATP_FRONT_MD")
         if not self.database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL connection URL")
         if self.database_pool_min_size < 1:

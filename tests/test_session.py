@@ -2,6 +2,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -93,6 +95,39 @@ def test_v6315_factories_receive_only_flow_path(monkeypatch, tmp_path):
     assert calls["td"][0].endswith("/td/")
     assert md_instance.front == "tcp://md:1"
     assert td_instance.front == "tcp://td:2"
+
+
+def test_td_only_connect_does_not_create_md_api(monkeypatch, tmp_path):
+    calls = []
+    td_instance = FakeApi()
+
+    class MdFactory:
+        @staticmethod
+        def CreateFtdcMdApi(*args):
+            calls.append(("md", args))
+            return FakeApi()
+
+    class TdFactory:
+        @staticmethod
+        def CreateFtdcTraderApi(*args):
+            calls.append(("td", args))
+            return td_instance
+
+    monkeypatch.setattr(atp_session, "ATP_AVAILABLE", True)
+    monkeypatch.setattr(atp_session.mdapi, "CThostFtdcMdApi", MdFactory, raising=False)
+    monkeypatch.setattr(atp_session.tdapi, "CThostFtdcTraderApi", TdFactory, raising=False)
+    monkeypatch.setattr(atp_session.tdapi, "THOST_TERT_RESTART", 0, raising=False)
+    config = settings(tmp_path)
+    config.enable_md = False
+    session = AtpSession(config, lambda *_args: None, MemoryRegistry())
+    session.td_ready.set()
+
+    assert session.connect(0.01)
+    assert session.md_api is None
+    assert [kind for kind, _args in calls] == ["td"]
+    assert session.is_ready()
+    with pytest.raises(RuntimeError, match="ATP_ENABLE_MD=false"):
+        session.subscribe_market_data(["ag2612"])
 
 
 def test_trader_callback_runs_login_settlement_sequence(monkeypatch, tmp_path):
