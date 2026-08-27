@@ -372,6 +372,8 @@ def test_zmq_command_round_trip():
         assert response["status"] == "ok"
         assert response["request_id"] == "round-trip"
         assert response["data"]["service"] == "atp-proxy"
+        assert response["data"]["md_enabled"] is True
+        assert response["data"]["td_enabled"] is True
     finally:
         client.close(0)
         context.term()

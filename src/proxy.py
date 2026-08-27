@@ -143,6 +143,7 @@ class AtpProxy:
                         "database_ready": self.order_registry.is_healthy(),
                         "active_symbols": self.subscriptions.active_symbols(),
                         "md_enabled": self.settings.enable_md,
+                        "td_enabled": True,
                     },
                     request_id,
                 )
@@ -232,6 +233,8 @@ class AtpProxy:
                         "database_ready": self.order_registry.is_healthy(),
                         "active_symbols": self.subscriptions.active_symbols(),
                         "published_queue_size": self._publish_queue.qsize(),
+                        "md_enabled": self.settings.enable_md,
+                        "td_enabled": True,
                     },
                     request_id,
                 )
