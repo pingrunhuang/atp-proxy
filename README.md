@@ -186,3 +186,34 @@ uv run python src/consumer_example.py
 - SDK 原生二进制仅提供 Windows 和 Linux x86_64；macOS 不能连接真实柜台。
 - `PUB/SUB` 不补发离线事件。客户端重连后应主动查询账户、持仓和委托恢复
   快照。
+
+
+## TD / MD 登录诊断
+
+在本项目目录运行：
+
+```bash
+uv run python scripts/test_login.py --timeout 20
+uv run python scripts/test_login.py --env-file /path/to/.env --timeout 30
+uv run python scripts/test_login.py --no-md
+```
+
+默认读取项目根目录 `.env`，已有进程环境变量优先；默认测试 TD 和 MD，
+即使服务配置关闭 MD 也会测试它，使用 `--no-md` 可仅检查 TD。
+脚本使用独立子进程和临时工作目录，输出各通道状态、失败原因及超时信息，
+成功返回 `0`，失败返回 `1`，参数错误返回 `2`。正常登录等待上限由
+`--timeout` 控制，原生初始化或退出卡住时，最多额外等待 5 秒后结束子进程。
+不启动 ZeroMQ 服务，不下单或撤单，不访问生产订单数据库。
+
+直接复用本项目原生 Session 的登录流程，需要在已安装兼容 SDK 的系统或
+容器中运行。使用临时 flow 文件及内存订单存储，不依赖 PostgreSQL 可用性。
+TD/MD PASS 表示登录就绪；未订阅行情，不能证明具体合约的行情权限或有实时报价。
+TD 就绪沿用 Session 的认证、登录和结算确认流程。
+
+镜像已包含脚本；重新构建后，可在已注入柜台环境变量的容器中运行：
+
+```bash
+uv run --no-sync python scripts/test_login.py --timeout 20
+```
+
+诊断会建立独立登录会话；柜台若限制同账号多点登录，请在维护窗口使用。
