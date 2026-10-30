@@ -13,21 +13,19 @@ RUN mkdir -p /opt/locale \
 # 使用官方国内可顺畅拉取的 python 基础镜像
 FROM python:3.12-slim-bookworm
 
-# 从 ghcr.io 官方复制 uv 二进制文件（或者通过脚本离线/国内源安装）
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-# 如果上面 COPY ghcr.io 依然慢，可以直接用 curl 从国内镜像/脚本安装 uv
-# RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+# 国内机拉 ghcr 慢：用官方 install 脚本装 uv（与 libgomp1 合并一层，少一次 apt）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates libgomp1 \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -sf /root/.local/bin/uv /usr/local/bin/uv \
+    && ln -sf /root/.local/bin/uvx /usr/local/bin/uvx \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev
